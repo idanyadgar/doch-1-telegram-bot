@@ -40,7 +40,9 @@ class MSAuth:
         self.driver.close()
 
         self.driver.switch_to.window(idf_window)
-        _ = WebDriverWait(self.driver, 10).until(EC.presence_of_element_located((By.CLASS_NAME, "finishTitle")))
+        _ = WebDriverWait(self.driver, 10).until(EC.any_of(
+            EC.presence_of_element_located((By.CLASS_NAME, "welcomeUser")),
+            EC.presence_of_element_located((By.CLASS_NAME, "finishTitle"))))
         idf_cookies = self.driver.get_cookies()
 
         return idf_cookies, ms_cookies
@@ -48,6 +50,7 @@ class MSAuth:
     def login(self, get_otc_callback: Callable[[], str]) -> (List[dict], List[dict]):
         self.driver.get("https://one.prat.idf.il/login")
         element = WebDriverWait(self.driver, 10).until(EC.any_of(
+            EC.presence_of_element_located((By.CLASS_NAME, "welcomeUser")),
             EC.presence_of_element_located((By.CLASS_NAME, "finishTitle")),
             EC.presence_of_element_located((By.NAME, "tz"))))
 

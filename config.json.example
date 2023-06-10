@@ -1,13 +1,7 @@
 {
 	"telegram_api_key": "",
 	"telegram_chat_id": "",
-	"password": "",
-	"username": "",
-	"cookies": {
-		"incap_ses_264_2025883": "",
-		 "visid_incap_2025883": "",
-		 "AppCookie": "",
-		 "BIGipServerMFT-One-Frontends": "",
-		 "nlbi_2025883": ""
-		}
+	"id_num": "",
+	"microsoft_passwd": "",
+	"idf_passwd": ""
 }

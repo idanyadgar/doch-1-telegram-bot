@@ -5,6 +5,8 @@ import logging
 import json
 from telegram.ext import Updater, CommandHandler, MessageHandler, Filters, ConversationHandler, CallbackQueryHandler
 from telegram import ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove
+from telegram.update import Update
+from telegram.ext.callbackcontext import CallbackContext
 from telegram_bot_calendar.base import CB_CALENDAR
 from functools import wraps
 from collections import OrderedDict
@@ -16,7 +18,7 @@ import re
 import os
 import pickle
 import datetime
-from report import Doch1_Report
+from report import Report, UnauthorizedException
 from hebrew_calendar import HebrewCalendar
 
 DATE_SELECT, PERSON_SELECT, STATUS_SELECT, NOTE_OUT_OF_BASE_SELECT, CANCEL_SELECT = range(1,6)
@@ -233,10 +235,8 @@ def setup_one_identity_routine(*args):
             updater.bot.send_message(chat_id=user_config['telegram_chat_id'], text='שולח דו"ח 1 להיום: {date}'.format(date=now.date()))
             print('שולח בצורה אוטומטית את הדוח של היום: {date}'.format(date=now.date()))
             updater.bot.send_message(chat_id=user_config['telegram_chat_id'], text='משיג רשימת חיילים')
-            res = report.login_and_get_soldiers()
-            if not res[0]:
-                updater.bot.send_message(chat_id=user_config['telegram_chat_id'], text=res[1])
-            res = send_report(report, res[1])
+            soldiers = report.get_soldiers()
+            res = send_report(report, soldiers)
             updater.bot.send_message(chat_id=user_config['telegram_chat_id'], text='הדו"ח נשלח:\n{report}'.format(report=res))
         else:
             print('Waiting for next time to report')
@@ -250,8 +250,29 @@ def setup_one_identity_routine(*args):
 def unknown_command(updater, context):
     updater.message.reply_text(text='לא הבנתי...', reply_markup=reply_markup)
 
-def error(update, context):
+def handle_unauth_error(update: Update, context: CallbackContext):
+    def ask_for_otp():
+        update.message.reply_text('הכנס את הקוד החד-פעמי להתחברות מול מיקרוסופט')
+        return update_queue.get().message.text
+
+    update.message.reply_text('נראה שאנחנו לא מחוברים לאתר צה"ל, מתחבר מחדש')
+    idf_cookies, ms_cookies = report.login(ask_for_otp)
+    if ms_cookies is None:
+        update.message.reply_text('אחד הפרטים לא נכונים, ההתחברות נכשלה')
+
+        return
+
+    conf_cache['idf_cookies'] = idf_cookies
+    conf_cache['ms_cookies'] = ms_cookies
+    write_to_conf_cache()
+
+    context.dispatcher.process_update(update)
+
+def error(update: Update, context: CallbackContext):
     """Log Errors caused by Updates."""
+    if isinstance(context.error, UnauthorizedException):
+        return handle_unauth_error(update, context)
+
     logger.warning('Update "%s" caused error "%s"', update, context.error)
 
 def initialize_user_config(path='config.json'):
@@ -282,6 +303,8 @@ def initialize_conf_cache(conf_cache_path='conf.cache'):
         conf_cache['send_confs']={}
         conf_cache['always_send'] = False
         conf_cache['default_configs'] = {}
+        conf_cache['idf_cookies'] = {}
+        conf_cache['ms_cookies'] = {}
         write_to_conf_cache(conf_cache_path)
 
 def write_to_conf_cache(conf_cache_path='conf.cache'):
@@ -315,11 +338,7 @@ def update_soldiers_list(updater, context):
     message = updater.message if updater.message is not None else updater.callback_query.message
 
     message.reply_text(text='משיג רשימת חיילים')
-    res = report.login_and_get_soldiers()
-    if not res[0]:
-        message.reply_text(text=res[1], reply_markup=reply_markup)
-        return
-    context.user_data['soldiers_list'] = res[1]
+    context.user_data['soldiers_list'] = report.get_soldiers()
 
 @restricted
 def show_future_config_callback(updater, context):
@@ -362,12 +381,10 @@ def send_today_report_callback(updater, context):
     """When the command /send_today_report is issued."""
     if can_send_now():
         updater.message.reply_text(text='משיג רשימת חיילים')
-        res = report.login_and_get_soldiers()
-        if not res[0]:
-            updater.message.reply_text(text=res[1], reply_markup=reply_markup)
-        context.user_data['soldiers_list'] = res[1]
+        soldiers = report.get_soldiers()
+        context.user_data['soldiers_list'] = soldiers
         updater.message.reply_text(text='שולח')
-        res = send_report(report, res[1])
+        res = send_report(report, soldiers)
         updater.message.reply_text(text='הדו"ח נשלח:\n{report}'.format(report=res), reply_markup=reply_markup)
     else:
         updater.message.reply_text(text='לא יכול לשלוח עכשיו, רק בין ראשון-חמישי בין השעות {start}-{end}'.format(start=START_TIME.strftime("%H:%M"), end=END_TIME.strftime("%H:%M")))
@@ -729,15 +746,14 @@ def main():
     
     initialize_conf_cache()
 
-    global report
-    report = Doch1_Report(user_config)
-    report.login()
-
     """Start the bot."""
     # Create the Updater and pass it your bot's token.
     # Make sure to set use_context=True to use the new context based callbacks
     # Post version 12 this will no longer be necessary
     updater = Updater(user_config['telegram_api_key'], use_context=True)
+
+    global report
+    report = Report(user_config, conf_cache['idf_cookies'], conf_cache['ms_cookies'])
 
     # Get the dispatcher to register handlers
     dp = updater.dispatcher
@@ -787,7 +803,8 @@ def main():
     updater.bot.send_message(chat_id=user_config['telegram_chat_id'], text='מה תרצה לעשות?', reply_markup=reply_markup)
 
     # Start the Bot
-    updater.start_polling()
+    global update_queue
+    update_queue = updater.start_polling()
     
     # start new thread for daily notifications
     args = (updater,)
