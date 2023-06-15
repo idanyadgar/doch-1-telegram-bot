@@ -3,6 +3,7 @@
 
 import logging
 import json
+from telegram import Chat
 from telegram.ext import Updater, CommandHandler, MessageHandler, Filters, ConversationHandler, CallbackQueryHandler
 from telegram import ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove
 from telegram.update import Update
@@ -234,9 +235,15 @@ def setup_one_identity_routine(*args):
         if can_send_now() and (now.date() in conf_cache['send_dates'] or conf_cache['always_send']):
             updater.bot.send_message(chat_id=user_config['telegram_chat_id'], text='שולח דו"ח 1 להיום: {date}'.format(date=now.date()))
             print('שולח בצורה אוטומטית את הדוח של היום: {date}'.format(date=now.date()))
-            updater.bot.send_message(chat_id=user_config['telegram_chat_id'], text='משיג רשימת חיילים')
-            soldiers = report.get_soldiers()
-            res = send_report(report, soldiers)
+            while True:
+                try:
+                    updater.bot.send_message(chat_id=user_config['telegram_chat_id'], text='משיג רשימת חיילים')
+                    soldiers = report.get_soldiers()
+                    res = send_report(report, soldiers)
+                    break
+                except UnauthorizedException:
+                    handle_unauth_error(updater.bot.getChat(user_config['telegram_chat_id']))
+
             updater.bot.send_message(chat_id=user_config['telegram_chat_id'], text='הדו"ח נשלח:\n{report}'.format(report=res))
         else:
             print('Waiting for next time to report')
@@ -250,15 +257,15 @@ def setup_one_identity_routine(*args):
 def unknown_command(updater, context):
     updater.message.reply_text(text='לא הבנתי...', reply_markup=reply_markup)
 
-def handle_unauth_error(update: Update, context: CallbackContext):
+def handle_unauth_error(chat: Chat):
     def ask_for_otp():
-        update.message.reply_text('הכנס את הקוד החד-פעמי להתחברות מול מיקרוסופט')
+        chat.send_message('הכנס את הקוד החד-פעמי להתחברות מול מיקרוסופט')
         return update_queue.get().message.text
 
-    update.message.reply_text('נראה שאנחנו לא מחוברים לאתר צה"ל, מתחבר מחדש')
+    chat.send_message('נראה שאנחנו לא מחוברים לאתר צה"ל, מתחבר מחדש')
     idf_cookies, ms_cookies = report.login(ask_for_otp)
     if ms_cookies is None:
-        update.message.reply_text('אחד הפרטים לא נכונים, ההתחברות נכשלה')
+        chat.send_message('אחד הפרטים לא נכונים, ההתחברות נכשלה')
 
         return
 
@@ -266,12 +273,13 @@ def handle_unauth_error(update: Update, context: CallbackContext):
     conf_cache['ms_cookies'] = ms_cookies
     write_to_conf_cache()
 
-    context.dispatcher.process_update(update)
 
 def error(update: Update, context: CallbackContext):
     """Log Errors caused by Updates."""
     if isinstance(context.error, UnauthorizedException):
-        return handle_unauth_error(update, context)
+        handle_unauth_error(update.message.chat)
+        context.dispatcher.process_update(update)
+        return
 
     logger.warning('Update "%s" caused error "%s"', update, context.error)
 
