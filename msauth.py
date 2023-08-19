@@ -94,6 +94,8 @@ class MSAuth:
                 otc_elem.clear()
             except TimeoutException:
                 break
+            except NoSuchWindowException:
+                break
 
         try:
             dont_show_again_elem = WebDriverWait(self.driver, 10).until(EC.presence_of_element_located((By.NAME, "DontShowAgain")))
